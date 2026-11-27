@@ -38,6 +38,19 @@ struct MenuContent: View {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
         }
+        if let s = model.snapshot, DDC.available {
+            ForEach(s.externals) { d in
+                Menu("\(d.name) brightness") {
+                    ForEach([0, 25, 50, 75, 100], id: \.self) { pct in
+                        Button("\(pct)%") {
+                            let max = model.ddcValues[d.id]?[.brightness]?.max ?? 100
+                            DDC.queue.async { DDC.write(.brightness, value: max * pct / 100, display: d.id) }
+                            model.ddcValues[d.id]?[.brightness]?.current = max * pct / 100
+                        }
+                    }
+                }
+            }
+        }
         Toggle("Apply lid profiles", isOn: $store.enabled)
         Button("Refresh") { model.refresh() }
         Button("Copy report") { model.copyReport() }
@@ -49,7 +62,7 @@ struct MenuContent: View {
 // MARK: Window
 
 enum Page: String, CaseIterable, Identifiable {
-    case overview = "Overview", displays = "Displays", connections = "Connections", lid = "Lid Profiles", report = "Report"
+    case overview = "Overview", displays = "Displays", connections = "Connections", lid = "Lid Profiles", alerts = "Alerts", report = "Report"
     var id: String { rawValue }
     var icon: String {
         switch self {
@@ -57,6 +70,7 @@ enum Page: String, CaseIterable, Identifiable {
         case .displays: return "display.2"
         case .connections: return "cable.connector.horizontal"
         case .lid: return "laptopcomputer"
+        case .alerts: return "bell"
         case .report: return "doc.plaintext"
         }
     }
@@ -107,6 +121,7 @@ struct PageContent: View {
         case .displays: DisplaysPage(snapshot: snapshot)
         case .connections: ConnectionsPage(snapshot: snapshot)
         case .lid: LidPage(snapshot: snapshot)
+        case .alerts: AlertsPage()
         case .report: ReportPage()
         }
     }
@@ -118,7 +133,7 @@ struct TrialBanner: View {
         if let t = model.trial {
             HStack {
                 Image(systemName: "timer")
-                Text("Keep \(t.mode.label) on \(t.displayName)? Going back in \(t.secondsLeft)s.")
+                Text("\(t.title) Going back in \(t.secondsLeft)s.")
                     .fontWeight(.medium)
                 Spacer()
                 Button("Go back") { model.revertTrial() }
@@ -168,6 +183,9 @@ struct OverviewPage: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text("What's going on with your displays").font(.title2.bold())
                 ForEach(snapshot.findings) { FindingRow(finding: $0) }
+                ForEach(snapshot.externals) { d in
+                    if let advice = Advisor.advice(for: d, current: snapshot.capacity) { AdviceCard(advice: advice) }
+                }
                 if !model.activity.isEmpty {
                     Card(title: "Activity") {
                         ForEach(model.activity, id: \.self) { Text($0).font(.callout.monospaced()) }
@@ -246,6 +264,10 @@ struct DisplayCard: View {
                 if let y = m.year { Row(label: "Made", value: String(y)) }
             }
             if let cap = capacity { Row(label: "Link", value: cap.summary) }
+            if !display.isBuiltin {
+                ColourSection(display: display)
+                MonitorControls(display: display)
+            }
             Divider().padding(.vertical, 4)
             let modes = showAll ? display.modes : display.nativeModes
             ForEach(modes, id: \.self) { mode in ModeRow(display: display, mode: mode, capacity: capacity) }
@@ -424,5 +446,144 @@ struct ReportPage: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
         }
         .padding(20)
+    }
+}
+
+
+// MARK: Advisor
+
+struct AdviceCard: View {
+    let advice: Advice
+
+    var body: some View {
+        Card(title: "Best setup for \(advice.display)") {
+            Text(advice.summary).fixedSize(horizontal: false, vertical: true)
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                GridRow {
+                    Text("Connection").foregroundStyle(.secondary)
+                    Text("Full RGB").foregroundStyle(.secondary)
+                    Text("With 4:2:2").foregroundStyle(.secondary)
+                    Text("Typical hardware").foregroundStyle(.secondary)
+                }
+                ForEach(advice.rows) { row in
+                    GridRow {
+                        HStack(spacing: 6) {
+                            Text(row.option.name).fontWeight(row.option.isCurrent ? .semibold : .regular)
+                            if row.option.isCurrent {
+                                Text("you").font(.caption).padding(.horizontal, 6).padding(.vertical, 1).background(Capsule().fill(.blue.opacity(0.15)))
+                            }
+                        }
+                        Text(row.bestRGB.map(DisplayMode.hz) ?? "-")
+                            .foregroundStyle((row.bestRGB ?? 0) >= advice.monitorMax ? Color.green : Color.primary)
+                        Text(row.best422.map(DisplayMode.hz) ?? "-")
+                        Text(row.option.example).foregroundStyle(.secondary).font(.callout)
+                    }
+                }
+            }
+            Text("Highest refresh at native resolution. Estimates, without display compression (DSC).")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: Colour format and monitor controls
+
+struct ColourSection: View {
+    @EnvironmentObject var model: AppModel
+    let display: DisplayInfo
+    @State private var choice: UInt32?
+
+    var body: some View {
+        if let state = model.colourStates[display.id] {
+            Row(label: "Colour format", value: state.currentColour?.label ?? "ID \(state.colourID)")
+            if Framebuffers.canSetColour && state.choices.count > 1 {
+                HStack {
+                    Text("Change colour").foregroundStyle(.secondary).frame(width: 150, alignment: .leading)
+                    Picker("Colour format", selection: Binding(get: { choice ?? state.colourID }, set: { choice = $0 })) {
+                        ForEach(state.choices) { c in Text(c.label).tag(c.id) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 300)
+                    Button("Try") {
+                        if let id = choice, let c = state.choices.first(where: { $0.id == id }) { model.tryColour(c, on: display) }
+                    }
+                    .disabled(choice == nil || choice == state.colourID || model.trial != nil)
+                    Text("Experimental").font(.caption).foregroundStyle(.orange)
+                }
+            } else if state.choices.count <= 1 {
+                Text("This refresh rate only fits the link in one colour format. Lower the refresh rate for more choices.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+struct MonitorControls: View {
+    @EnvironmentObject var model: AppModel
+    let display: DisplayInfo
+
+    var body: some View {
+        Group {
+            if !DDC.available {
+                EmptyView()
+            } else if let values = model.ddcValues[display.id] {
+                if values.isEmpty {
+                    Row(label: "Monitor controls", value: "Not available. The monitor or dock doesn't pass DDC/CI through.")
+                }
+                ForEach(VCP.allCases) { vcp in
+                    if let v = values[vcp] {
+                        HStack {
+                            Text(vcp.name).foregroundStyle(.secondary).frame(width: 150, alignment: .leading)
+                            Slider(value: Binding(get: { Double(v.current) },
+                                                  set: { model.setDDC(vcp, value: Int($0.rounded()), display: display.id) }),
+                                   in: 0...Double(v.max))
+                                .frame(width: 300)
+                            Text("\(v.current)").monospacedDigit().frame(width: 40, alignment: .trailing)
+                        }
+                    }
+                }
+            } else {
+                Row(label: "Monitor controls", value: "Checking…")
+            }
+        }
+        .onAppear { model.loadDDC(for: display) }
+    }
+}
+
+// MARK: Alerts
+
+struct AlertsPage: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject var settings = AppSettings.shared
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Alerts").font(.title2.bold())
+                Text("PortSight follows the display driver live and checks power and USB-C ports every 5 seconds. It tells you when the link gets slower, colour drops to 4:2:2, the cable is nearly full, the lid changes the monitor's refresh rate, power drops, or the monitor link is lost.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Toggle("Watch live", isOn: $settings.liveWatch)
+                Toggle("Send notifications for problems", isOn: $settings.notifications)
+                    .disabled(!settings.liveWatch)
+                Card(title: "Recent events") {
+                    if model.events.isEmpty {
+                        Text(settings.liveWatch ? "Nothing yet. Events appear here when something changes." : "Live watching is off.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(model.events) { e in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text(e.date, style: .time).monospacedDigit().foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
+                            Image(systemName: ["exclamationmark.octagon.fill", "exclamationmark.triangle.fill", "info.circle", "checkmark.circle"][e.level.rawValue])
+                                .foregroundStyle([Color.red, .orange, .secondary, .green][e.level.rawValue])
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(e.title)
+                                if !e.detail.isEmpty { Text(e.detail).font(.callout).foregroundStyle(.secondary) }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(20)
+        }
     }
 }
