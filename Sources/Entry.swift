@@ -31,6 +31,8 @@ enum CLI {
       PortSight --ddc [brightness|contrast|volume] [VALUE] [--display ID]
                                         read or set the monitor's own controls
       PortSight --clear-cache           forget saved link history
+      PortSight --self-test             run built-in checks
+      PortSight --version               print the version
     """
 
     static func pick(_ idText: String?) -> DisplayInfo? {
@@ -52,7 +54,8 @@ enum CLI {
         case "--render-pages":
             // Developer check: draws each window page to PNG files without needing screen recording.
             guard let dir = value(after: "--render-pages") else { print("Give a folder"); return 1 }
-            return MainActor.assumeIsolated { PageRenderer.run(directory: dir) }
+            let height = value(after: "--height").flatMap(Double.init) ?? 1000
+            return MainActor.assumeIsolated { PageRenderer.run(directory: dir, height: CGFloat(height)) }
         case "--watch":
             let watch = LiveWatch.shared
             watch.verbose = true
@@ -64,7 +67,7 @@ enum CLI {
         case "--advice":
             let snap = Diagnosis.gather(logHours: 2)
             for d in snap.externals {
-                guard let a = Advisor.advice(for: d, current: snap.capacity) else { continue }
+                guard let a = Advisor.advice(for: d, current: snap.capacity(for: d)) else { continue }
                 print("\(a.display)\n  \(a.summary)")
                 for r in a.rows {
                     let rgb = r.bestRGB.map(DisplayMode.hz) ?? "-", y = r.best422.map(DisplayMode.hz) ?? "-"
@@ -101,6 +104,11 @@ enum CLI {
                 print("\(vcp.name): \(v.map { "\($0.current) of \($0.max)" } ?? "not available")")
             }
             return 0
+        case "--version":
+            print("PortSight \(Updates.currentVersion)")
+            return 0
+        case "--self-test":
+            return SelfTest.run()
         case "--clear-cache":
             KernelLog.clearCache()
             print("Link history cleared")

@@ -22,6 +22,8 @@ final class AppModel: ObservableObject {
     @Published var colourStates: [CGDirectDisplayID: FramebufferState] = [:]
     @Published var ddcValues: [CGDirectDisplayID: [VCP: DDCValue]] = [:]
     @Published var ddcChecked: Set<CGDirectDisplayID> = []
+    @Published var updateAvailable: String?
+    @Published var notificationStatus = "Checking…"
 
     private var trialTimer: Timer?
     private var ddcWrites: [String: DispatchWorkItem] = [:]
@@ -60,6 +62,10 @@ final class AppModel: ObservableObject {
         }
         if AppSettings.shared.notifications { Notifier.requestPermission() }
         refresh()
+        checkForUpdates()
+        Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkForUpdates() }
+        }
     }
 
     var issueCount: Int { snapshot?.findings.filter { $0.level.rawValue <= Finding.Level.warning.rawValue }.count ?? 0 }
@@ -211,6 +217,36 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: Misc
+
+    func checkForUpdates() {
+        guard AppSettings.shared.checkUpdates else { return }
+        Task {
+            let newer = await Updates.check()
+            await MainActor.run { self.updateAvailable = newer }
+        }
+    }
+
+    func refreshNotificationStatus() {
+        Notifier.status { [weak self] text in self?.notificationStatus = text }
+    }
+
+    func sendTestNotification() {
+        Notifier.requestPermission()
+        Notifier.post(WatchEvent(level: .warning, title: "PortSight test", detail: "Notifications work. You'll see alerts like this when something changes with your monitor link."))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.refreshNotificationStatus() }
+    }
+
+    func perform(_ action: Finding.Action) {
+        switch action {
+        case .setLidClosedMode(let key, let mode):
+            LidProfileStore.shared.setMode(mode, forKey: key, lidClosed: true)
+            LidProfileStore.shared.enabled = true
+            note("Lid closed will now use \(mode.label). Lid profiles are on.")
+            refreshDisplays()
+        case .showPage:
+            break
+        }
+    }
 
     func copyReport() {
         NSPasteboard.general.clearContents()

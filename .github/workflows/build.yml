@@ -13,7 +13,7 @@ jobs:
       - name: Build
         run: ./build.sh
       - name: Smoke test
-        run: ./build/PortSight.app/Contents/MacOS/PortSight --help
+        run: ./build/PortSight.app/Contents/MacOS/PortSight --self-test
       - uses: actions/upload-artifact@v4
         with:
           name: PortSight

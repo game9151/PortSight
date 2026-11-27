@@ -30,8 +30,28 @@ struct MenuContent: View {
                 Text("\(d.name): \(d.current?.label ?? "?")")
             }
             Text(model.issueCount == 0 ? "No problems found" : "\(model.issueCount) issue\(model.issueCount == 1 ? "" : "s") found")
+            ForEach(s.externals) { d in
+                if let cur = d.current {
+                    let rates = d.modes.filter { $0.width == cur.width && $0.height == cur.height && $0.pixelWidth == cur.pixelWidth }
+                    if rates.count > 1 {
+                        Menu("\(d.name) refresh rate") {
+                            ForEach(rates, id: \.self) { m in
+                                Button((cur.matches(m) ? "✓ " : "    ") + DisplayMode.hz(m.refresh)) {
+                                    openWindow(id: "main")
+                                    NSApp.activate(ignoringOtherApps: true)
+                                    model.tryMode(m, on: d)
+                                }
+                                .disabled(cur.matches(m) || model.trial != nil)
+                            }
+                        }
+                    }
+                }
+            }
         } else {
             Text("Checking…")
+        }
+        if let v = model.updateAvailable {
+            Button("Update available: \(v)") { NSWorkspace.shared.open(Updates.releasesPage) }
         }
         Divider()
         Button("Open PortSight") {
@@ -184,7 +204,7 @@ struct OverviewPage: View {
                 Text("What's going on with your displays").font(.title2.bold())
                 ForEach(snapshot.findings) { FindingRow(finding: $0) }
                 ForEach(snapshot.externals) { d in
-                    if let advice = Advisor.advice(for: d, current: snapshot.capacity) { AdviceCard(advice: advice) }
+                    if let advice = Advisor.advice(for: d, current: snapshot.capacity(for: d)) { AdviceCard(advice: advice) }
                 }
                 if !model.activity.isEmpty {
                     Card(title: "Activity") {
@@ -198,6 +218,7 @@ struct OverviewPage: View {
 }
 
 struct FindingRow: View {
+    @EnvironmentObject var model: AppModel
     let finding: Finding
     var colour: Color { [Color.red, .orange, .blue, .green][finding.level.rawValue] }
     var icon: String { ["exclamationmark.octagon.fill", "exclamationmark.triangle.fill", "info.circle.fill", "checkmark.circle.fill"][finding.level.rawValue] }
@@ -210,6 +231,9 @@ struct FindingRow: View {
                 Text(finding.detail).fixedSize(horizontal: false, vertical: true)
                 if let fix = finding.fix {
                     Text("Fix: \(fix)").foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if let action = finding.action, let title = finding.actionTitle {
+                    Button(title) { model.perform(action) }.padding(.top, 4)
                 }
             }
             Spacer(minLength: 0)
@@ -237,7 +261,7 @@ struct DisplaysPage: View {
                 Text("Pick a mode to try it. If you don't press Keep within 15 seconds, it goes back, so a black screen fixes itself.")
                     .foregroundStyle(.secondary)
                 ForEach(snapshot.displays) { d in
-                    DisplayCard(display: d, capacity: d.isBuiltin ? nil : snapshot.capacity, showAll: showAllModes)
+                    DisplayCard(display: d, capacity: snapshot.capacity(for: d), showAll: showAllModes)
                 }
             }
             .padding(20)
@@ -565,6 +589,20 @@ struct AlertsPage: View {
                 Toggle("Watch live", isOn: $settings.liveWatch)
                 Toggle("Send notifications for problems", isOn: $settings.notifications)
                     .disabled(!settings.liveWatch)
+                HStack {
+                    Text("Notifications: \(model.notificationStatus)").foregroundStyle(.secondary)
+                    if model.notificationStatus.hasPrefix("Blocked") {
+                        Button("Open notification settings") {
+                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
+                        }
+                    } else {
+                        Button("Send a test notification") { model.sendTestNotification() }
+                    }
+                }
+                Toggle("Check GitHub for new versions once a day", isOn: $settings.checkUpdates)
+                if let v = model.updateAvailable {
+                    Button("Version \(v) is out. Download it") { NSWorkspace.shared.open(Updates.releasesPage) }
+                }
                 Card(title: "Recent events") {
                     if model.events.isEmpty {
                         Text(settings.liveWatch ? "Nothing yet. Events appear here when something changes." : "Live watching is off.")
@@ -585,5 +623,6 @@ struct AlertsPage: View {
             }
             .padding(20)
         }
+        .onAppear { model.refreshNotificationStatus() }
     }
 }

@@ -96,6 +96,11 @@ enum Framebuffers {
         return fb
     }
 
+    private static func forget(_ fb: UnsafeMutableRawPointer) {
+        lock.lock(); defer { lock.unlock() }
+        handles = handles.filter { $0.value != fb }
+    }
+
     private static func colourMode(_ d: [String: Any]) -> ColourMode? {
         guard let id = (d["ID"] as? NSNumber)?.uint32Value else { return nil }
         return ColourMode(id: id,
@@ -109,9 +114,12 @@ enum Framebuffers {
     static func state(for display: CGDirectDisplayID) -> FramebufferState? {
         guard CGDisplayIsBuiltin(display) == 0, let getMode, let getSupported, let fb = handle(for: display) else { return nil }
         var colourID: UInt32 = 0, timingID: UInt32 = 0
-        guard getMode(fb, &colourID, &timingID) == KERN_SUCCESS else { return nil }
         var colours: Unmanaged<CFArray>?, timings: Unmanaged<CFArray>?
-        guard getSupported(fb, &colours, &timings) == KERN_SUCCESS else { return nil }
+        guard getMode(fb, &colourID, &timingID) == KERN_SUCCESS,
+              getSupported(fb, &colours, &timings) == KERN_SUCCESS else {
+            forget(fb)   // the monitor may have been replugged; reopen next time
+            return nil
+        }
         let allColours = (colours?.takeUnretainedValue() as? [[String: Any]] ?? []).compactMap(colourMode)
         let timing = (timings?.takeUnretainedValue() as? [[String: Any]] ?? []).first { ($0["ID"] as? NSNumber)?.uint32Value == timingID }
         let allowed = (timing?["ColorModes"] as? [[String: Any]] ?? []).compactMap(colourMode)

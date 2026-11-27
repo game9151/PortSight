@@ -50,6 +50,7 @@ final class LidWatcher {
         guard timer == nil else { return }
         CGDisplayRegisterReconfigurationCallback({ _, flags, _ in
             if flags.contains(.beginConfigurationFlag) { return }
+            if flags.contains(.addFlag) || flags.contains(.removeFlag) { DDC.queue.async { DDC.reset() } }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { LidWatcher.shared.check() }
         }, nil)
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in LidWatcher.shared.check() }

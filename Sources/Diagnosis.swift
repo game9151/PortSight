@@ -2,11 +2,18 @@ import Foundation
 
 struct Finding: Identifiable {
     enum Level: Int { case problem = 0, warning = 1, info = 2, ok = 3 }
+    enum Action {
+        /// Pin this display's lid-closed mode and turn lid profiles on.
+        case setLidClosedMode(displayKey: String, mode: DisplayMode)
+        case showPage(String)
+    }
     let id = UUID()
     let level: Level
     let title: String
     let detail: String
     var fix: String?
+    var action: Action?
+    var actionTitle: String?
 }
 
 struct SystemSnapshot {
@@ -20,6 +27,21 @@ struct SystemSnapshot {
     var findings: [Finding] = []
 
     var externals: [DisplayInfo] { displays.filter { !$0.isBuiltin } }
+
+    /// The latest logged link whose picture size matches this display's current signal.
+    func link(for display: DisplayInfo) -> LinkSnapshot? {
+        guard !display.isBuiltin else { return nil }
+        if externals.count <= 1 { return log.latest }
+        guard let mode = display.current else { return nil }
+        let (w, h) = display.signalSize(for: mode)
+        return log.snapshots.last { $0.width == w && ($0.height ?? $0.activeHeight) == h }
+    }
+
+    func capacity(for display: DisplayInfo) -> LinkCapacity? {
+        guard !display.isBuiltin else { return nil }
+        if let s = link(for: display), s.lanes > 0 { return s.capacity }
+        return externals.count <= 1 ? capacity : nil
+    }
 
     /// The link to the external display: measured from the log, else estimated from the port.
     var capacity: LinkCapacity? {
@@ -53,6 +75,15 @@ enum Diagnosis {
         return s
     }
 
+    /// The display mode that matches the link used with the lid open.
+    static func lidOpenMode(display: DisplayInfo, link: LinkSnapshot) -> DisplayMode? {
+        guard let r = link.refresh else { return nil }
+        if let cur = display.current, abs(cur.refresh - r) < 1 { return cur }
+        let (w, h) = display.nativeSize
+        return display.modes.first { $0.pixelWidth == w && $0.pixelHeight == h && !$0.isHiDPI && abs($0.refresh - r) < 1 }
+            ?? display.modes.first { abs($0.refresh - r) < 1 && $0.pixelWidth == w }
+    }
+
     static func findings(for s: SystemSnapshot) -> [Finding] {
         var out: [Finding] = []
         let log = s.log
@@ -64,10 +95,18 @@ enum Diagnosis {
             var detail = "Lid open: \(open.modeLabel), \(open.colourLabel). Lid closed: macOS switches to \(closed.modeLabel), \(closed.colourLabel)."
             if let r = closed.ratio { detail += " That uses \(Fmt.pct(r)) of the cable's bandwidth." }
             detail += " If the monitor says \"no signal\" when you close the lid, this is the likely cause."
-            out.append(Finding(level: (closed.ratio ?? 0) > 0.9 ? .problem : .warning,
-                               title: "Closing the lid switches the monitor to \(DisplayMode.hz(cr))",
-                               detail: detail,
-                               fix: "In Lid Profiles, set the lid-closed mode to \(DisplayMode.hz(or)), the rate that works with the lid open, and turn profiles on."))
+            var finding = Finding(level: (closed.ratio ?? 0) > 0.9 ? .problem : .warning,
+                                  title: "Closing the lid switches the monitor to \(DisplayMode.hz(cr))",
+                                  detail: detail,
+                                  fix: "Pin the lid-closed mode to \(DisplayMode.hz(or)), the rate that works with the lid open.")
+            if let display = s.externals.first, let mode = lidOpenMode(display: display, link: open) {
+                let alreadyPinned = LidProfileStore.shared.enabled && LidProfileStore.shared.profiles[display.key]?.closed?.matches(mode) == true
+                if !alreadyPinned {
+                    finding.action = .setLidClosedMode(displayKey: display.key, mode: mode)
+                    finding.actionTitle = "Use \(DisplayMode.hz(mode.refresh)) when the lid is closed"
+                }
+            }
+            if finding.action != nil || !(LidProfileStore.shared.enabled) { out.append(finding) }
         }
 
         // 2. DisplayPort sharing a USB-C cable with USB 3.
@@ -153,6 +192,22 @@ enum Diagnosis {
         }
         if let open = s.log.linkWhileLid(closed: false) { lines.append("  Lid open: \(open.modeLabel), \(open.colourLabel)") }
         if let closed = s.log.linkWhileLid(closed: true) { lines.append("  Lid closed: \(closed.modeLabel), \(closed.colourLabel)") }
+
+        for d in s.externals {
+            if let st = Framebuffers.state(for: d.id) {
+                lines.append("  Colour format (\(d.name)): \(st.currentColour?.label ?? "ID \(st.colourID)"); fits at this mode: \(st.choices.map(\.label).joined(separator: " | "))")
+            }
+        }
+
+        lines.append("\nBEST SETUP")
+        for d in s.externals {
+            if let a = Advisor.advice(for: d, current: s.capacity(for: d)) {
+                lines.append("  \(a.summary)")
+                for r in a.rows {
+                    lines.append("  \(r.option.isCurrent ? "*" : " ") \(r.option.name): RGB \(r.bestRGB.map(DisplayMode.hz) ?? "-"), 4:2:2 \(r.best422.map(DisplayMode.hz) ?? "-")")
+                }
+            }
+        }
 
         lines.append("\nUSB-C PORTS")
         if s.ports.isEmpty { lines.append("  (no USB-C port info on this Mac)") }

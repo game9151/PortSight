@@ -12,6 +12,8 @@ The kernel log showed the real cause. macOS keeps one display setting for lid op
 
 PortSight finds this automatically and can pin the lid-closed mode to one that works.
 
+![Overview](docs/screenshots/Overview.png)
+
 ## What it does
 
 **Overview**: plain-English findings, for example:
@@ -31,9 +33,13 @@ PortSight finds this automatically and can pin the lid-closed mode to one that w
 
 **Alerts**: PortSight follows the display driver live and checks power and USB-C ports every 5 seconds. You get a notification when the link gets slower, colour drops to 4:2:2, the cable is nearly full, closing the lid changes the refresh rate, power drops (for example to a dock's 12W), or the monitor link is lost.
 
+![Displays](docs/screenshots/Displays.png)
+
 **Connections**: the measured video link (lanes x Gbps, DP version, colour format, bandwidth used, DSC), each USB-C port's active transports, power source and wattage, and every USB device including hubs and docks.
 
 **Lid Profiles**: choose a mode for lid open and lid closed per monitor. PortSight applies it for 10 seconds after each lid change and leaves your manual changes alone the rest of the time. Off by default.
+
+**Menu bar**: issue count, a refresh rate switcher, monitor brightness, and a notice when a new version is out. The update check fetches GitHub's public release list once a day and sends nothing about your Mac. You can turn it off on the Alerts page.
 
 **Report**: a copyable text report for GitHub issues and forums. Serial numbers are left out.
 
@@ -59,6 +65,7 @@ Useful when the screen is black and you can only reach the Mac over SSH or Scree
 /Applications/PortSight.app/Contents/MacOS/PortSight --colours           # colour formats for the current mode
 /Applications/PortSight.app/Contents/MacOS/PortSight --set-colour 104    # switch colour format (experimental)
 /Applications/PortSight.app/Contents/MacOS/PortSight --ddc brightness 70 # monitor brightness over DDC
+/Applications/PortSight.app/Contents/MacOS/PortSight --self-test         # built-in checks
 ```
 
 ## How it works

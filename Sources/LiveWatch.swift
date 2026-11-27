@@ -16,17 +16,32 @@ final class AppSettings: ObservableObject {
 
     @Published var liveWatch: Bool { didSet { defaults.set(liveWatch, forKey: "liveWatch"); liveWatch ? LiveWatch.shared.start() : LiveWatch.shared.stop() } }
     @Published var notifications: Bool { didSet { defaults.set(notifications, forKey: "notifications"); if notifications { Notifier.requestPermission() } } }
+    @Published var checkUpdates: Bool { didSet { defaults.set(checkUpdates, forKey: "checkUpdates") } }
 
     private init() {
-        defaults.register(defaults: ["liveWatch": true, "notifications": true])
+        defaults.register(defaults: ["liveWatch": true, "notifications": true, "checkUpdates": true])
         liveWatch = defaults.bool(forKey: "liveWatch")
         notifications = defaults.bool(forKey: "notifications")
+        checkUpdates = defaults.bool(forKey: "checkUpdates")
     }
 }
 
 enum Notifier {
     static func requestPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    /// Whether macOS currently allows PortSight's notifications.
+    static func status(_ done: @escaping (String) -> Void) {
+        UNUserNotificationCenter.current().getNotificationSettings { s in
+            let text: String
+            switch s.authorizationStatus {
+            case .authorized, .provisional, .ephemeral: text = "Allowed"
+            case .denied: text = "Blocked in System Settings > Notifications > PortSight"
+            default: text = "Not asked yet"
+            }
+            DispatchQueue.main.async { done(text) }
+        }
     }
 
     static func post(_ event: WatchEvent) {

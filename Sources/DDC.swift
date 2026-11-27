@@ -114,9 +114,18 @@ enum DDC {
         return nil
     }
 
+    /// Forgets cached services, e.g. after a monitor is replugged. Call on `DDC.queue`.
+    static func reset() { services.removeAll() }
+
     /// Writes a VCP value. Call on `DDC.queue`.
     @discardableResult
     static func write(_ vcp: VCP, value: Int, display: CGDirectDisplayID) -> Bool {
+        if writeOnce(vcp, value: value, display: display) { return true }
+        services[display] = nil
+        return writeOnce(vcp, value: value, display: display)
+    }
+
+    private static func writeOnce(_ vcp: VCP, value: Int, display: CGDirectDisplayID) -> Bool {
         guard let writeI2C, let av = service(for: display) else { return false }
         var packet: [UInt8] = [0x84, 0x03, vcp.rawValue, UInt8((value >> 8) & 0xFF), UInt8(value & 0xFF)]
         packet.append(checksum(packet))
